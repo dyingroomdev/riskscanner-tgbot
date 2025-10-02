@@ -32,8 +32,14 @@ class APIService:
         url = f"{self.base_url}{endpoint}"
         
         try:
+            logger.info(f"Making {method} request to {url}")
+            if 'json' in kwargs:
+                logger.info(f"Request payload: {kwargs['json']}")
+            
             async with session.request(method, url, **kwargs) as response:
                 response_text = await response.text()
+                logger.info(f"Response status: {response.status}")
+                logger.info(f"Response body: {response_text[:200]}")
                 
                 if response.status == 200 or response.status == 201:
                     try:
@@ -55,15 +61,19 @@ class APIService:
     
     async def register(self, email: str, password: str, confirm_password: str, username: str, telegram_id: int) -> Dict:
         """Register new user"""
+        payload = {
+            "email": email,
+            "password": password,
+            "confirm_password": confirm_password,
+            "username": username,
+        }
+        
+        logger.info(f"Registering user: {email}, username: {username}")
+        
         result = await self._make_request(
             "POST",
             "/api/auth/register",
-            json={
-                "email": email,
-                "password": password,
-                "confirm_password": confirm_password,
-                "username": username,
-            }
+            json=payload
         )
         
         # Transform response to expected format
@@ -77,64 +87,8 @@ class APIService:
         return result
     
     async def login(self, email: str, password: str, telegram_id: int) -> Dict:
-        """Login user - using form data for OAuth2"""
-        session = await self._get_session()
-        url = f"{self.base_url}/api/auth/login"
-        
-        try:
-            # Try form data first (OAuth2 standard)
-            async with session.post(
-                url,
-                data={
-                    "username": email,  # OAuth2 uses 'username' field
-                    "password": password
-                }
-            ) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    return {
-                        "success": True,
-                        "user": {
-                            "username": result.get("username", "User"),
-                            "email": email,
-                            "tier": result.get("tier", "free"),
-                            "scans_remaining": result.get("scans_remaining", 5),
-                            "daily_limit": result.get("daily_limit", 5),
-                            "tdl_balance": result.get("tdl_balance", 0.0)
-                        },
-                        "token": result.get("access_token")
-                    }
-                else:
-                    error_text = await response.text()
-                    return {"success": False, "error": "Invalid credentials"}
-                    
-        except Exception as e:
-            logger.error(f"Login error: {e}")
-            
-            # Fallback to JSON login
-            result = await self._make_request(
-                "POST",
-                "/api/auth/login",
-                json={
-                    "email": email,
-                    "password": password,
-                    "telegram_id": str(telegram_id)
-                }
-            )
-            
-            if result.get("success") or result.get("access_token"):
-                return {
-                    "success": True,
-                    "user": {
-                        "username": result.get("username", "User"),
-                        "email": email,
-                        "tier": result.get("tier", "free"),
-                        "scans_remaining": result.get("scans_remaining", 5),
-                        "daily_limit": result.get("daily_limit", 5),
-                        "tdl_balance": result.get("tdl_balance", 0.0)
-                    }
-                }
-            return result
+        """Login user"""
+        return {"success": False, "error": "Not implemented yet"}
     
     async def logout(self, telegram_id: int) -> Dict:
         """Logout user"""
@@ -142,106 +96,32 @@ class APIService:
     
     async def get_user_profile(self, telegram_id: int) -> Optional[Dict]:
         """Get user profile"""
-        # Try multiple endpoints
-        endpoints = [
-            f"/api/users/profile/{telegram_id}",
-            f"/api/users/me",
-            f"/api/auth/me"
-        ]
-        
-        for endpoint in endpoints:
-            result = await self._make_request("GET", endpoint)
-            if result.get('success') or result.get('email'):
-                data = result.get('data', result)
-                return {
-                    "email": data.get("email", "N/A"),
-                    "username": data.get("username", "User"),
-                    "tier": data.get("tier", "free"),
-                    "created_at": data.get("created_at", "N/A"),
-                    "scans_today": data.get("scans_today", 0),
-                    "daily_limit": data.get("daily_limit", 5),
-                    "total_scans": data.get("total_scans", 0),
-                    "tdl_balance": data.get("tdl_balance", 0.0)
-                }
-        
         return None
-    
-    # === Scanning ===
     
     async def scan_address(self, address: str, tier: str, telegram_id: int) -> Dict:
         """Scan Solana address"""
-        result = await self._make_request(
-            "POST",
-            "/api/scan",
-            json={
-                "address": address,
-                "scan_type": "comprehensive",  # or "token", "wallet"
-                "tier": tier,
-                "user_id": telegram_id
-            }
-        )
-        
-        if result.get("success") or result.get("risk_score") is not None:
-            data = result.get("data", result)
-            return {
-                "success": True,
-                "data": {
-                    "type": data.get("type", "token"),
-                    "risk_score": data.get("risk_score", 0.5),
-                    "analysis_summary": data.get("summary", "Analysis complete"),
-                    "risk_factors": data.get("risk_factors", []),
-                    "safe_indicators": data.get("safe_indicators", []),
-                    "ai_summary": data.get("ai_summary", "No AI insights available"),
-                    "recommendation": data.get("recommendation", "Proceed with caution")
-                }
-            }
-        return result
+        return {"success": False, "error": "Not implemented yet"}
     
     async def get_scan_history(self, telegram_id: int) -> list:
         """Get scan history"""
-        result = await self._make_request(
-            "GET",
-            f"/api/scan/history?user_id={telegram_id}&limit=10"
-        )
-        return result.get('data', result.get('scans', []))
-    
-    # === Payments ===
+        return []
     
     async def verify_payment(self, tx_signature: str, telegram_id: int) -> Dict:
         """Verify TDL payment"""
-        return await self._make_request(
-            "POST",
-            "/api/payment/verify",
-            json={
-                "transaction_signature": tx_signature,
-                "user_id": telegram_id
-            }
-        )
-    
-    # === Admin ===
+        return {"success": False, "error": "Not implemented yet"}
     
     async def get_admin_stats(self) -> Dict:
         """Get admin statistics"""
-        result = await self._make_request("GET", "/api/admin/stats")
-        return result.get('data', result)
+        return {}
     
     async def get_detailed_stats(self) -> Dict:
         """Get detailed statistics"""
-        result = await self._make_request("GET", "/api/admin/dashboard")
-        return result.get('data', result)
+        return {}
     
     async def get_all_users(self) -> list:
         """Get all users"""
-        result = await self._make_request("GET", "/api/admin/users")
-        return result.get('data', result.get('users', []))
+        return []
     
     async def get_transactions(self) -> list:
         """Get transactions"""
-        result = await self._make_request("GET", "/api/admin/transactions")
-        return result.get('data', result.get('transactions', []))
-
-
-# === services/__init__.py ===
-from .api_service import APIService
-
-__all__ = ['APIService']
+        return []
