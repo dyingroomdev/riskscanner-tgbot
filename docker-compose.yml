@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  telegram-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: splshield-telegram-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Override API URL to use backend container name
+      # If your backend service is named 'backend', 'api', or 'splshield-api'
+      # Change this to match your backend service name
+      - API_BASE_URL=http://splshield-api:8000
+    networks:
+      - pg-network
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      - splshield-api  # Remove this if backend is in different compose file
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  pg-network:
+    external: true  # Use existing pg-network
+
+# ============================================
+# NOTES:
+# ============================================
+# 
+# 1. BACKEND SERVICE NAME:
+#    Change 'splshield-api' to match your actual backend service name
+#    Common names: backend, api, splshield-backend, fastapi-app
+#    
+#    To find it, run: docker network inspect pg-network
+#    Look for the container/service name in the backend
+#
+# 2. If backend is in a different docker-compose file:
+#    Remove the 'depends_on' section
+#
+# 3. Make sure pg-network exists:
+#    docker network ls | grep pg-network
+#    
+#    If not, create it:
+#    docker network create pg-network
+#
+# 4. ENVIRONMENT VARIABLES:
+#    The bot will use:
+#    - BOT_TOKEN from .env
+#    - API_BASE_URL (overridden to use Docker network)
+#    - ADMIN_USER_IDS from .env
+#
+# ============================================
