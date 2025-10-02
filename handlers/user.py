@@ -1,275 +1,247 @@
-# === handlers/user.py ===
-"""User command handlers for SPL Shield Bot"""
+# === services/api_service.py ===
+"""API service for backend communication"""
 
 import logging
-from aiogram import Router, F
-from aiogram.filters import Command, StateFilter
-from aiogram.types import Message, CallbackQuery
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
+import aiohttp
+from typing import Optional, Dict, Any
 
-from utils.messages import (
-    WELCOME_MESSAGE, HELP_MESSAGE, REGISTER_PROMPT, 
-    REGISTER_SUCCESS, LOGIN_PROMPT, LOGIN_SUCCESS,
-    DASHBOARD_TEMPLATE, ERROR_NOT_REGISTERED, 
-    ERROR_NOT_LOGGED_IN, SUCCESS_LOGOUT
-)
-from keyboards.user_kb import get_main_menu, get_cancel_keyboard
-
-router = Router()
 logger = logging.getLogger(__name__)
 
 
-# FSM States
-class RegisterStates(StatesGroup):
-    waiting_for_email = State()
-    waiting_for_password = State()
-    waiting_for_username = State()
-
-
-class LoginStates(StatesGroup):
-    waiting_for_email = State()
-    waiting_for_password = State()
-
-
-# === /start Command ===
-@router.message(Command("start"))
-async def cmd_start(message: Message):
-    """Handle /start command - Welcome message"""
-    await message.answer(
-        WELCOME_MESSAGE,
-        reply_markup=get_main_menu()
-    )
-
-
-# === /help Command ===
-@router.message(Command("help"))
-async def cmd_help(message: Message):
-    """Handle /help command - Show help menu"""
-    await message.answer(HELP_MESSAGE)
-
-
-# === /register Command ===
-@router.message(Command("register"))
-async def cmd_register(message: Message, state: FSMContext):
-    """Start registration process"""
-    await state.set_state(RegisterStates.waiting_for_email)
-    await message.answer(
-        REGISTER_PROMPT,
-        reply_markup=get_cancel_keyboard()
-    )
-
-
-@router.message(RegisterStates.waiting_for_email)
-async def process_register_email(message: Message, state: FSMContext):
-    """Process email during registration"""
-    email = message.text.strip()
+class APIService:
+    """Service to interact with SPL Shield backend API"""
     
-    # Basic email validation
-    if "@" not in email or "." not in email:
-        await message.answer("❌ Invalid email format. Please try again:")
-        return
+    def __init__(self, base_url: str):
+        self.base_url = base_url.rstrip('/')
+        self.session: Optional[aiohttp.ClientSession] = None
     
-    # Store email and ask for password
-    await state.update_data(email=email)
-    await state.set_state(RegisterStates.waiting_for_password)
-    await message.answer(
-        "✅ Email accepted!\n\n🔒 Now, create a strong password:",
-        reply_markup=get_cancel_keyboard()
-    )
-
-
-@router.message(RegisterStates.waiting_for_password)
-async def process_register_password(message: Message, state: FSMContext):
-    """Process password during registration"""
-    password = message.text.strip()
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create aiohttp session"""
+        if self.session is None or self.session.closed:
+            self.session = aiohttp.ClientSession()
+        return self.session
     
-    if len(password) < 6:
-        await message.answer("❌ Password must be at least 6 characters. Try again:")
-        return
+    async def close(self):
+        """Close the session"""
+        if self.session and not self.session.closed:
+            await self.session.close()
     
-    # Store password and ask for username
-    await state.update_data(password=password)
-    await state.set_state(RegisterStates.waiting_for_username)
-    await message.answer(
-        "✅ Password set!\n\n👤 Finally, choose a username:",
-        reply_markup=get_cancel_keyboard()
-    )
-
-
-@router.message(RegisterStates.waiting_for_username)
-async def process_register_username(message: Message, state: FSMContext, api_service):
-    """Complete registration process"""
-    username = message.text.strip()
+    async def _make_request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
+        """Make HTTP request to backend"""
+        session = await self._get_session()
+        url = f"{self.base_url}{endpoint}"
+        
+        try:
+            async with session.request(method, url, **kwargs) as response:
+                response_text = await response.text()
+                
+                if response.status == 200 or response.status == 201:
+                    try:
+                        return await response.json()
+                    except:
+                        return {"success": True, "data": response_text}
+                else:
+                    logger.error(f"API error: {response.status} - {response_text}")
+                    try:
+                        error_data = await response.json()
+                        return {"success": False, "error": error_data.get("detail", response_text)}
+                    except:
+                        return {"success": False, "error": response_text}
+        except Exception as e:
+            logger.error(f"Request failed: {e}")
+            return {"success": False, "error": str(e)}
     
-    if len(username) < 3:
-        await message.answer("❌ Username must be at least 3 characters. Try again:")
-        return
+    # === User Authentication ===
     
-    # Get stored data
-    data = await state.get_data()
-    email = data.get('email')
-    password = data.get('password')
-    
-    # Call API to register
-    try:
-        result = await api_service.register(
-            email=email,
-            password=password,
-            username=username,
-            telegram_id=message.from_user.id
+    async def register(self, email: str, password: str, confirm_password: str, username: str, telegram_id: int) -> Dict:
+        """Register new user"""
+        result = await self._make_request(
+            "POST",
+            "/api/auth/register",
+            json={
+                "email": email,
+                "password": password,
+                "confirm_password": confirm_password,
+                "username": username,
+            }
         )
         
-        if result.get('success'):
-            await message.answer(
-                REGISTER_SUCCESS.format(
-                    username=username,
-                    email=email,
-                    tier=result.get('tier', 'Free'),
-                    daily_scans=result.get('daily_scans', 5)
-                ),
-                reply_markup=get_main_menu()
-            )
-            await state.clear()
-        else:
-            await message.answer(f"❌ Registration failed: {result.get('error', 'Unknown error')}")
+        # Transform response to expected format
+        if result.get("success") or result.get("id") or result.get("email"):
+            return {
+                "success": True,
+                "tier": result.get("tier", "free"),
+                "daily_scans": result.get("daily_scans", 5),
+                "user": result
+            }
+        return result
+    
+    async def login(self, email: str, password: str, telegram_id: int) -> Dict:
+        """Login user - using form data for OAuth2"""
+        session = await self._get_session()
+        url = f"{self.base_url}/api/auth/login"
+        
+        try:
+            # Try form data first (OAuth2 standard)
+            async with session.post(
+                url,
+                data={
+                    "username": email,  # OAuth2 uses 'username' field
+                    "password": password
+                }
+            ) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    return {
+                        "success": True,
+                        "user": {
+                            "username": result.get("username", "User"),
+                            "email": email,
+                            "tier": result.get("tier", "free"),
+                            "scans_remaining": result.get("scans_remaining", 5),
+                            "daily_limit": result.get("daily_limit", 5),
+                            "tdl_balance": result.get("tdl_balance", 0.0)
+                        },
+                        "token": result.get("access_token")
+                    }
+                else:
+                    error_text = await response.text()
+                    return {"success": False, "error": "Invalid credentials"}
+                    
+        except Exception as e:
+            logger.error(f"Login error: {e}")
             
-    except Exception as e:
-        logger.error(f"Registration error: {e}")
-        await message.answer("❌ Registration failed. Please try again later.")
-
-
-# === /login Command ===
-@router.message(Command("login"))
-async def cmd_login(message: Message, state: FSMContext):
-    """Start login process"""
-    await state.set_state(LoginStates.waiting_for_email)
-    await message.answer(
-        LOGIN_PROMPT,
-        reply_markup=get_cancel_keyboard()
-    )
-
-
-@router.message(LoginStates.waiting_for_email)
-async def process_login_email(message: Message, state: FSMContext):
-    """Process email during login"""
-    email = message.text.strip()
-    
-    await state.update_data(email=email)
-    await state.set_state(LoginStates.waiting_for_password)
-    await message.answer(
-        "✅ Email received!\n\n🔒 Now enter your password:",
-        reply_markup=get_cancel_keyboard()
-    )
-
-
-@router.message(LoginStates.waiting_for_password)
-async def process_login_password(message: Message, state: FSMContext, api_service):
-    """Complete login process"""
-    password = message.text.strip()
-    data = await state.get_data()
-    email = data.get('email')
-    
-    try:
-        result = await api_service.login(
-            email=email,
-            password=password,
-            telegram_id=message.from_user.id
-        )
-        
-        if result.get('success'):
-            user_data = result.get('user', {})
-            await message.answer(
-                LOGIN_SUCCESS.format(
-                    username=user_data.get('username', 'User'),
-                    tier=user_data.get('tier', 'Free'),
-                    scans_remaining=user_data.get('scans_remaining', 0),
-                    daily_limit=user_data.get('daily_limit', 5),
-                    tdl_balance=user_data.get('tdl_balance', 0.0)
-                ),
-                reply_markup=get_main_menu()
+            # Fallback to JSON login
+            result = await self._make_request(
+                "POST",
+                "/api/auth/login",
+                json={
+                    "email": email,
+                    "password": password,
+                    "telegram_id": str(telegram_id)
+                }
             )
-            await state.clear()
-        else:
-            await message.answer(f"❌ Login failed: {result.get('error', 'Invalid credentials')}")
             
-    except Exception as e:
-        logger.error(f"Login error: {e}")
-        await message.answer("❌ Login failed. Please try again.")
-
-
-# === /logout Command ===
-@router.message(Command("logout"))
-async def cmd_logout(message: Message, api_service):
-    """Handle logout"""
-    try:
-        result = await api_service.logout(telegram_id=message.from_user.id)
-        await message.answer(SUCCESS_LOGOUT)
-    except Exception as e:
-        logger.error(f"Logout error: {e}")
-        await message.answer("❌ Logout failed.")
-
-
-# === /dashboard Command ===
-@router.message(Command("dashboard"))
-async def cmd_dashboard(message: Message, api_service):
-    """Show user dashboard"""
-    try:
-        user_data = await api_service.get_user_profile(telegram_id=message.from_user.id)
+            if result.get("success") or result.get("access_token"):
+                return {
+                    "success": True,
+                    "user": {
+                        "username": result.get("username", "User"),
+                        "email": email,
+                        "tier": result.get("tier", "free"),
+                        "scans_remaining": result.get("scans_remaining", 5),
+                        "daily_limit": result.get("daily_limit", 5),
+                        "tdl_balance": result.get("tdl_balance", 0.0)
+                    }
+                }
+            return result
+    
+    async def logout(self, telegram_id: int) -> Dict:
+        """Logout user"""
+        return {"success": True, "message": "Logged out"}
+    
+    async def get_user_profile(self, telegram_id: int) -> Optional[Dict]:
+        """Get user profile"""
+        # Try multiple endpoints
+        endpoints = [
+            f"/api/users/profile/{telegram_id}",
+            f"/api/users/me",
+            f"/api/auth/me"
+        ]
         
-        if not user_data:
-            await message.answer(ERROR_NOT_LOGGED_IN)
-            return
+        for endpoint in endpoints:
+            result = await self._make_request("GET", endpoint)
+            if result.get('success') or result.get('email'):
+                data = result.get('data', result)
+                return {
+                    "email": data.get("email", "N/A"),
+                    "username": data.get("username", "User"),
+                    "tier": data.get("tier", "free"),
+                    "created_at": data.get("created_at", "N/A"),
+                    "scans_today": data.get("scans_today", 0),
+                    "daily_limit": data.get("daily_limit", 5),
+                    "total_scans": data.get("total_scans", 0),
+                    "tdl_balance": data.get("tdl_balance", 0.0)
+                }
         
-        tier_benefits = {
-            'free': '• 5 scans/day\n• Basic analysis',
-            'premium': '• 50 scans/day\n• Advanced AI insights',
-            'mvp': '• Unlimited scans\n• Real-time monitoring'
-        }
-        
-        await message.answer(
-            DASHBOARD_TEMPLATE.format(
-                email=user_data.get('email', 'N/A'),
-                username=user_data.get('username', 'User'),
-                tier=user_data.get('tier', 'Free').upper(),
-                created_at=user_data.get('created_at', 'N/A'),
-                scans_today=user_data.get('scans_today', 0),
-                daily_limit=user_data.get('daily_limit', 5),
-                total_scans=user_data.get('total_scans', 0),
-                tdl_balance=user_data.get('tdl_balance', 0.0),
-                tier_benefits=tier_benefits.get(user_data.get('tier', 'free').lower(), '')
-            )
+        return None
+    
+    # === Scanning ===
+    
+    async def scan_address(self, address: str, tier: str, telegram_id: int) -> Dict:
+        """Scan Solana address"""
+        result = await self._make_request(
+            "POST",
+            "/api/scan",
+            json={
+                "address": address,
+                "scan_type": "comprehensive",  # or "token", "wallet"
+                "tier": tier,
+                "user_id": telegram_id
+            }
         )
         
-    except Exception as e:
-        logger.error(f"Dashboard error: {e}")
-        await message.answer("❌ Failed to load dashboard.")
+        if result.get("success") or result.get("risk_score") is not None:
+            data = result.get("data", result)
+            return {
+                "success": True,
+                "data": {
+                    "type": data.get("type", "token"),
+                    "risk_score": data.get("risk_score", 0.5),
+                    "analysis_summary": data.get("summary", "Analysis complete"),
+                    "risk_factors": data.get("risk_factors", []),
+                    "safe_indicators": data.get("safe_indicators", []),
+                    "ai_summary": data.get("ai_summary", "No AI insights available"),
+                    "recommendation": data.get("recommendation", "Proceed with caution")
+                }
+            }
+        return result
+    
+    async def get_scan_history(self, telegram_id: int) -> list:
+        """Get scan history"""
+        result = await self._make_request(
+            "GET",
+            f"/api/scan/history?user_id={telegram_id}&limit=10"
+        )
+        return result.get('data', result.get('scans', []))
+    
+    # === Payments ===
+    
+    async def verify_payment(self, tx_signature: str, telegram_id: int) -> Dict:
+        """Verify TDL payment"""
+        return await self._make_request(
+            "POST",
+            "/api/payment/verify",
+            json={
+                "transaction_signature": tx_signature,
+                "user_id": telegram_id
+            }
+        )
+    
+    # === Admin ===
+    
+    async def get_admin_stats(self) -> Dict:
+        """Get admin statistics"""
+        result = await self._make_request("GET", "/api/admin/stats")
+        return result.get('data', result)
+    
+    async def get_detailed_stats(self) -> Dict:
+        """Get detailed statistics"""
+        result = await self._make_request("GET", "/api/admin/dashboard")
+        return result.get('data', result)
+    
+    async def get_all_users(self) -> list:
+        """Get all users"""
+        result = await self._make_request("GET", "/api/admin/users")
+        return result.get('data', result.get('users', []))
+    
+    async def get_transactions(self) -> list:
+        """Get transactions"""
+        result = await self._make_request("GET", "/api/admin/transactions")
+        return result.get('data', result.get('transactions', []))
 
 
-# === /cancel Command ===
-@router.message(Command("cancel"), StateFilter("*"))
-async def cmd_cancel(message: Message, state: FSMContext):
-    """Cancel current operation"""
-    await state.clear()
-    await message.answer(
-        "❌ Operation cancelled.",
-        reply_markup=get_main_menu()
-    )
+# === services/__init__.py ===
+from .api_service import APIService
 
-
-# === Callback Handlers ===
-@router.callback_query(F.data == "show_help")
-async def callback_help(callback: CallbackQuery):
-    """Handle help button callback"""
-    await callback.message.answer(HELP_MESSAGE)
-    await callback.answer()
-
-
-@router.callback_query(F.data == "main_menu")
-async def callback_main_menu(callback: CallbackQuery):
-    """Handle main menu button callback"""
-    await callback.message.answer(
-        "🏠 Main Menu",
-        reply_markup=get_main_menu()
-    )
-    await callback.answer()
+__all__ = ['APIService']
