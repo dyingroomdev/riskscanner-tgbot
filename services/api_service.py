@@ -14,6 +14,7 @@ class APIService:
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip('/')
         self.session: Optional[aiohttp.ClientSession] = None
+        self.access_token: Optional[str] = None
     
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create aiohttp session"""
@@ -30,6 +31,12 @@ class APIService:
         """Make HTTP request to backend"""
         session = await self._get_session()
         url = f"{self.base_url}{endpoint}"
+        
+        # Add authorization header if we have a token
+        if self.access_token and 'headers' not in kwargs:
+            kwargs['headers'] = {'Authorization': f'Bearer {self.access_token}'}
+        elif self.access_token and 'headers' in kwargs:
+            kwargs['headers']['Authorization'] = f'Bearer {self.access_token}'
         
         try:
             logger.info(f"Making {method} request to {url}")
@@ -115,6 +122,12 @@ class APIService:
                 
                 if response.status == 200:
                     result = await response.json()
+                    
+                    # Store access token if provided
+                    if result.get("access_token"):
+                        self.access_token = result["access_token"]
+                        logger.info("Access token stored")
+                    
                     return {
                         "success": True,
                         "user": {
@@ -135,6 +148,7 @@ class APIService:
     
     async def logout(self, telegram_id: int) -> Dict:
         """Logout user"""
+        self.access_token = None
         return {"success": True, "message": "Logged out"}
     
     async def get_user_profile(self, telegram_id: int) -> Optional[Dict]:
@@ -175,21 +189,44 @@ class APIService:
             }
         )
         
-        if result.get("success") or result.get("data"):
-            data = result.get("data", result)
+        logger.info(f"Raw scan result: {result}")
+        
+        # Backend returns data directly: {address, scan_type, analysis: {...}}
+        if result.get("analysis") or result.get("address"):
+            analysis = result.get("analysis", {})
+            risk_score = analysis.get("risk_score", 0.5)
+            risk_level = analysis.get("risk_level", "UNKNOWN")
+            
+            # Extract risk factors
+            risk_factors = []
+            for rf in analysis.get("risk_factors", []):
+                if isinstance(rf, dict):
+                    risk_factors.append(rf.get("description", rf.get("name", "Unknown risk")))
+                else:
+                    risk_factors.append(str(rf))
+            
+            # Extract strengths/safe indicators
+            safe_indicators = analysis.get("strengths", [])
+            
+            # Extract recommendations
+            recommendations = analysis.get("recommendations", [])
+            recommendation = recommendations[0] if recommendations else "Proceed with caution"
+            
             return {
                 "success": True,
                 "data": {
-                    "type": data.get("type", "token"),
-                    "risk_score": data.get("risk_score", 0.5),
-                    "analysis_summary": data.get("summary", data.get("analysis_summary", "Analysis complete")),
-                    "risk_factors": data.get("risk_factors", []),
-                    "safe_indicators": data.get("safe_indicators", []),
-                    "ai_summary": data.get("ai_summary", "No AI insights available"),
-                    "recommendation": data.get("recommendation", "Proceed with caution")
+                    "type": result.get("scan_type", "token"),
+                    "risk_score": risk_score,
+                    "analysis_summary": f"Risk Level: {risk_level}",
+                    "risk_factors": risk_factors if risk_factors else ["No significant risks detected"],
+                    "safe_indicators": safe_indicators if safe_indicators else ["Limited safe indicators"],
+                    "ai_summary": f"This is a {risk_level} risk {result.get('scan_type', 'token')} with a risk score of {risk_score}.",
+                    "recommendation": recommendation
                 }
             }
-        return result
+        
+        # Fallback for unexpected format
+        return {"success": False, "error": "Unexpected response format from backend"}
     
     async def get_scan_history(self, telegram_id: int) -> list:
         """Get scan history"""
@@ -197,6 +234,10 @@ class APIService:
             "GET",
             f"/api/scan/history?limit=10"
         )
+        
+        # Return the scans if available
+        if isinstance(result, list):
+            return result
         return result.get('data', result.get('scans', []))
     
     # === Payments ===
@@ -211,7 +252,11 @@ class APIService:
         form_data.add_field('transaction_signature', tx_signature)
         
         try:
-            async with session.post(url, data=form_data) as response:
+            headers = {}
+            if self.access_token:
+                headers['Authorization'] = f'Bearer {self.access_token}'
+            
+            async with session.post(url, data=form_data, headers=headers) as response:
                 if response.status == 200:
                     return await response.json()
                 else:
@@ -224,19 +269,23 @@ class APIService:
     async def get_admin_stats(self) -> Dict:
         """Get admin statistics"""
         result = await self._make_request("GET", "/api/admin/dashboard")
-        return result.get('data', result)
+        return result if isinstance(result, dict) else {}
     
     async def get_detailed_stats(self) -> Dict:
         """Get detailed statistics"""
         result = await self._make_request("GET", "/api/admin/dashboard")
-        return result.get('data', result)
+        return result if isinstance(result, dict) else {}
     
     async def get_all_users(self) -> list:
         """Get all users"""
         result = await self._make_request("GET", "/api/users/")
+        if isinstance(result, list):
+            return result
         return result.get('data', result.get('users', []))
     
     async def get_transactions(self) -> list:
         """Get transactions"""
         result = await self._make_request("GET", "/api/payment/credits")
+        if isinstance(result, list):
+            return result
         return result.get('data', result.get('transactions', []))

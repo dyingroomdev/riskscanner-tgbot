@@ -80,12 +80,21 @@ REGISTER_SUCCESS = """
 
 Welcome to SPL Shield, {username}!
 
-Your account has been created with:
-• Email: {email}
-• Tier: {tier}
-• Daily Scans: {daily_scans}
+📧 <b>IMPORTANT: Verify Your Email</b>
+We've sent a verification email to:
+<b>{email}</b>
 
-You can now use /login to access your account.
+<b>Next Steps:</b>
+1. Check your email inbox (and spam folder)
+2. Click the verification link
+3. Come back and use /login
+
+Your account details:
+- Email: {email}
+- Tier: {tier}
+- Daily Scans: {daily_scans}
+
+⚠️ You must verify your email before you can login!
 """
 
 # Login Messages

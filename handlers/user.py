@@ -216,11 +216,31 @@ async def process_login_password(message: Message, state: FSMContext, api_servic
             )
             await state.clear()
         else:
-            await message.answer(f"❌ Login failed: {result.get('error', 'Invalid credentials')}")
+            error = result.get('error', 'Invalid credentials')
+            # Check for email verification error
+            if 'verify' in str(error).lower() or '403' in str(error):
+                await message.answer(
+                    "❌ <b>Email Not Verified</b>\n\n"
+                    "Please check your email and click the verification link before logging in.\n\n"
+                    "Didn't receive the email? Check your spam folder."
+                )
+            elif 'Invalid credentials' in str(error) or '401' in str(error):
+                await message.answer(
+                    "❌ <b>Invalid Email or Password</b>\n\n"
+                    "Please check your credentials and try again.\n\n"
+                    "Use /register if you don't have an account yet."
+                )
+            else:
+                await message.answer(f"❌ Login failed: {error}")
+            await state.clear()
             
     except Exception as e:
         logger.error(f"Login error: {e}")
-        await message.answer("❌ Login failed. Please try again.")
+        await message.answer(
+            "❌ Login failed. If you just registered, please verify your email first.\n\n"
+            "Check your email inbox for the verification link."
+        )
+        await state.clear()
 
 
 # === /logout Command ===
@@ -283,6 +303,17 @@ async def cmd_cancel(message: Message, state: FSMContext):
 
 
 # === Callback Handlers ===
+@router.callback_query(F.data == "cancel")
+async def callback_cancel(callback: CallbackQuery, state: FSMContext):
+    """Handle cancel button callback"""
+    await state.clear()
+    await callback.message.answer(
+        "❌ Operation cancelled.",
+        reply_markup=get_main_menu()
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data == "show_help")
 async def callback_help(callback: CallbackQuery):
     """Handle help button callback"""
