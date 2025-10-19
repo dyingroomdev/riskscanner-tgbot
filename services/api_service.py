@@ -148,9 +148,22 @@ class APIService:
 
         overview = await self.fetch_account_overview()
 
-        user_info = overview.get("profile", {}).copy()
-        user_info.setdefault("email", email)
-        user_info["credits"] = overview.get("credits", {})
+        user_info = self._compose_profile(overview, fallback_email=email)
+        if user_info is None:
+            user_info = {
+                "email": email,
+                "username": payload.get("user", {}).get("username", "User"),
+                "tier": payload.get("user", {}).get("subscription_tier", "free"),
+                "created_at": payload.get("user", {}).get("created_at"),
+                "last_login": payload.get("user", {}).get("last_login"),
+                "tdl_balance": payload.get("user", {}).get("tdl_balance", 0.0),
+                "credits": {
+                    "free": None,
+                    "premium": None,
+                    "mvp": None,
+                },
+                "scans_remaining": None,
+            }
 
         return {
             "success": True,
@@ -183,40 +196,43 @@ class APIService:
 
         return {"profile": profile_payload, "credits": credits_payload}
 
-    async def get_user_profile(self, telegram_id: int) -> Optional[Dict[str, Any]]:  # noqa: ARG002
-        overview = await self.fetch_account_overview()
-        profile = overview.get("profile")
+    def _compose_profile(self, overview: Dict[str, Any], fallback_email: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        profile = (overview or {}).get("profile") or {}
         if not profile:
             return None
 
-        credits = overview.get("credits", {}) or {}
+        credits_raw = (overview or {}).get("credits") or {}
         tier = profile.get("subscription_tier")
         if not tier:
-            if credits.get("mvp_credits", 0) > 0:
+            if credits_raw.get("mvp_credits", 0):
                 tier = "mvp"
-            elif credits.get("premium_credits", 0) > 0:
+            elif credits_raw.get("premium_credits", 0):
                 tier = "premium"
             else:
                 tier = "free"
 
-        scans_remaining = credits.get("free_credits")
+        scans_remaining = credits_raw.get("free_credits")
         if scans_remaining is None and tier == "free":
             scans_remaining = 0
 
         return {
-            "email": profile.get("email", "Unknown"),
+            "email": profile.get("email") or fallback_email or "Unknown",
             "username": profile.get("username", "User"),
             "tier": tier,
             "created_at": profile.get("created_at"),
             "last_login": profile.get("last_login"),
             "tdl_balance": profile.get("tdl_balance", 0.0),
             "credits": {
-                "free": credits.get("free_credits"),
-                "premium": credits.get("premium_credits"),
-                "mvp": credits.get("mvp_credits"),
+                "free": credits_raw.get("free_credits"),
+                "premium": credits_raw.get("premium_credits"),
+                "mvp": credits_raw.get("mvp_credits"),
             },
             "scans_remaining": scans_remaining,
         }
+
+    async def get_user_profile(self, telegram_id: int) -> Optional[Dict[str, Any]]:  # noqa: ARG002
+        overview = await self.fetch_account_overview()
+        return self._compose_profile(overview)
 
     # ------------------------------------------------------------------
     # Scanning
