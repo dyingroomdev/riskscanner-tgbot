@@ -51,7 +51,7 @@ HELP_MESSAGE = """
 • Risk scores are 0–1 (higher = riskier)  
 • Premium/MVP scans consume credits or direct TDL
 
-Need help? @splshield_support
+Need help? @splsupportbot
 """
 
 # Registration Messages

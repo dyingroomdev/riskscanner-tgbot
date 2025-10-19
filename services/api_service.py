@@ -147,6 +147,7 @@ class APIService:
             self.access_token = token
 
         overview = await self.fetch_account_overview()
+        logger.debug("Login overview payload: %s", overview)
 
         user_info = self._compose_profile(overview, fallback_email=email)
         if user_info is None:
@@ -232,6 +233,7 @@ class APIService:
 
     async def get_user_profile(self, telegram_id: int) -> Optional[Dict[str, Any]]:  # noqa: ARG002
         overview = await self.fetch_account_overview()
+        logger.debug("Profile overview payload: %s", overview)
         return self._compose_profile(overview)
 
     # ------------------------------------------------------------------
