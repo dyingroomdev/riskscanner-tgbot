@@ -43,7 +43,10 @@ async def main():
     dp = Dispatcher(storage=storage)
     
     # Initialize API service
-    api_service = APIService(base_url=settings.API_BASE_URL)
+    api_service = APIService(
+        base_url=settings.API_BASE_URL,
+        host_header=getattr(settings, "API_HOST_HEADER", None),
+    )
     
     # Register middleware with api_service
     dp.message.middleware(AuthMiddleware(api_service))

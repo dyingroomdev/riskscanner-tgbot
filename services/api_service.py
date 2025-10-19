@@ -13,10 +13,11 @@ logger = logging.getLogger(__name__)
 class APIService:
     """Wrapper around aiohttp to communicate with the backend."""
 
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, host_header: Optional[str] = None):
         self.base_url = base_url.rstrip("/")
         self.session: Optional[aiohttp.ClientSession] = None
         self.access_token: Optional[str] = None
+        self.host_header = host_header
 
     # ------------------------------------------------------------------
     # Session / request helpers
@@ -35,6 +36,8 @@ class APIService:
         merged = dict(headers or {})
         if self.access_token and "Authorization" not in merged:
             merged["Authorization"] = f"Bearer {self.access_token}"
+        if self.host_header:
+            merged.setdefault("Host", self.host_header)
         return merged
 
     async def _request(

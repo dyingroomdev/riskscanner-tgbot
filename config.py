@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     
     # Backend API (localhost:8000 since running on same VPS)
     API_BASE_URL: str = "http://localhost:8000"
+    API_HOST_HEADER: str | None = None
     
     # Admin Users (comma-separated Telegram user IDs)
     ADMIN_USER_IDS: str = ""
