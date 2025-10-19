@@ -145,15 +145,11 @@ async def process_register_username(message: Message, state: FSMContext, api_ser
         )
         
         if result.get('success'):
-            await message.answer(
-                REGISTER_SUCCESS.format(
-                    username=username,
-                    email=email,
-                    tier=result.get('tier', 'Free'),
-                    daily_scans=result.get('daily_scans', 5)
-                ),
-                reply_markup=get_main_menu()
+            success_message = result.get('message') or REGISTER_SUCCESS.format(
+                username=username,
+                email=email,
             )
+            await message.answer(success_message, reply_markup=get_main_menu())
             await state.clear()
         else:
             error_msg = result.get('error', 'Unknown error')
@@ -203,14 +199,22 @@ async def process_login_password(message: Message, state: FSMContext, api_servic
         )
         
         if result.get('success'):
-            user_data = result.get('user', {})
+            user_data = result.get('user', {}) or {}
+            credits = user_data.get('credits', {}) or {}
+            tier = user_data.get('tier', 'free')
+            tdl_balance = user_data.get('tdl_balance', 0.0)
+            free_credits = credits.get('free')
+            premium_credits = credits.get('premium')
+            mvp_credits = credits.get('mvp')
+
             await message.answer(
                 LOGIN_SUCCESS.format(
                     username=user_data.get('username', 'User'),
-                    tier=user_data.get('tier', 'Free'),
-                    scans_remaining=user_data.get('scans_remaining', 0),
-                    daily_limit=user_data.get('daily_limit', 5),
-                    tdl_balance=user_data.get('tdl_balance', 0.0)
+                    tier=tier.title(),
+                    free_credits=free_credits if free_credits is not None else 0,
+                    premium_credits=premium_credits if premium_credits is not None else 0,
+                    mvp_credits=mvp_credits if mvp_credits is not None else 0,
+                    tdl_balance=tdl_balance,
                 ),
                 reply_markup=get_main_menu()
             )
@@ -261,15 +265,22 @@ async def cmd_dashboard(message: Message, api_service):
     """Show user dashboard"""
     try:
         user_data = await api_service.get_user_profile(telegram_id=message.from_user.id)
-        
+        credits = (user_data or {}).get("credits", {}) if user_data else {}
+        scans_remaining = user_data.get("scans_remaining") if user_data else None
+        tier = (user_data or {}).get("tier", "free").lower()
+
+        daily_limit = "Unlimited" if tier in {"premium", "mvp"} else (scans_remaining if scans_remaining is not None else "5")
+        scans_today = scans_remaining if scans_remaining is not None else "—"
+        total_scans = len(await api_service.get_scan_history(telegram_id=message.from_user.id, limit=100)) if user_data else 0
+
         if not user_data:
             await message.answer(ERROR_NOT_LOGGED_IN)
             return
         
         tier_benefits = {
             'free': '• 5 scans/day\n• Basic analysis',
-            'premium': '• 50 scans/day\n• Advanced AI insights',
-            'mvp': '• Unlimited scans\n• Real-time monitoring'
+            'premium': '• Premium credits for enhanced scans\n• Advanced liquidity + holder analytics',
+            'mvp': '• MVP credits for full AI suite\n• MEV, rugpull & social sentiment analysis'
         }
         
         await message.answer(
@@ -278,11 +289,14 @@ async def cmd_dashboard(message: Message, api_service):
                 username=user_data.get('username', 'User'),
                 tier=user_data.get('tier', 'Free').upper(),
                 created_at=user_data.get('created_at', 'N/A'),
-                scans_today=user_data.get('scans_today', 0),
-                daily_limit=user_data.get('daily_limit', 5),
-                total_scans=user_data.get('total_scans', 0),
-                tdl_balance=user_data.get('tdl_balance', 0.0),
-                tier_benefits=tier_benefits.get(user_data.get('tier', 'free').lower(), '')
+                scans_today=scans_today,
+                daily_limit=daily_limit,
+                total_scans=total_scans,
+                tdl_balance=user_data.get('tdl_balance', '0'),
+                tier_benefits=tier_benefits.get(tier, ''),
+                credits_free=credits.get('free', '—'),
+                credits_premium=credits.get('premium', '—'),
+                credits_mvp=credits.get('mvp', '—'),
             )
         )
         
@@ -328,4 +342,11 @@ async def callback_main_menu(callback: CallbackQuery):
         "🏠 Main Menu",
         reply_markup=get_main_menu()
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "dashboard")
+async def callback_dashboard(callback: CallbackQuery, api_service):
+    """Show dashboard from inline keyboard."""
+    await cmd_dashboard(callback.message, api_service)
     await callback.answer()

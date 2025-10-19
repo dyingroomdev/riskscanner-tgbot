@@ -25,18 +25,27 @@ async def cmd_admin(message: Message, api_service):
         return
     
     try:
-        stats = await api_service.get_admin_stats()
-        
+        stats_overview = await api_service.get_admin_stats()
+        users = stats_overview.get("users", {})
+        revenue = stats_overview.get("revenue", {})
+        usage = stats_overview.get("usage", {})
+
         await message.answer(
             f"🛡️ <b>SPL Shield Admin Panel</b>\n\n"
             f"<b>System Stats:</b>\n"
-            f"• Total Users: {stats.get('total_users', 0)}\n"
-            f"• Active Today: {stats.get('active_today', 0)}\n"
-            f"• Total Scans: {stats.get('total_scans', 0)}\n"
-            f"• Scans Today: {stats.get('scans_today', 0)}\n\n"
+            f"• Total Users: {users.get('total', 0)}\n"
+            f"• Verified Users: {users.get('verified', 0)} ({users.get('verification_rate', 0):.1f}%)\n"
+            f"• New Users Today: {users.get('new_today', 0)}\n\n"
             f"<b>Revenue:</b>\n"
-            f"• Total TDL: {stats.get('total_revenue', 0)}\n"
-            f"• Today: {stats.get('revenue_today', 0)}\n\n"
+            f"• Total TDL: {revenue.get('total_tdl', 0)}\n"
+            f"• Today: {revenue.get('today_tdl', 0)}\n"
+            f"• Confirmed Transactions: {revenue.get('total_transactions', 0)}\n"
+            f"• Pending Transactions: {revenue.get('pending_transactions', 0)}\n\n"
+            f"<b>API Usage (24h):</b>\n"
+            f"• Requests: {usage.get('requests_24h', 0)}\n"
+            f"• Success Rate: {usage.get('success_rate', 0):.1f}%\n"
+            f"• Unique Users: {usage.get('unique_users_24h', 0)}\n"
+            f"• Avg req / hour: {usage.get('avg_requests_per_hour', 0):.1f}\n\n"
             f"Use /stats, /users, /transactions for details."
         )
     except Exception as e:
@@ -53,20 +62,17 @@ async def cmd_stats(message: Message, api_service):
     
     try:
         stats = await api_service.get_detailed_stats()
-        
+        credits = stats.get("credits", {})
+        tier_breakdown = credits.get("tier_breakdown", {})
+
         await message.answer(
             f"📊 <b>Detailed Statistics</b>\n\n"
-            f"<b>Users by Tier:</b>\n"
-            f"• Free: {stats.get('free_users', 0)}\n"
-            f"• Premium: {stats.get('premium_users', 0)}\n"
-            f"• MVP: {stats.get('mvp_users', 0)}\n\n"
-            f"<b>Scans:</b>\n"
-            f"• Today: {stats.get('scans_today', 0)}\n"
-            f"• This Week: {stats.get('scans_week', 0)}\n"
-            f"• This Month: {stats.get('scans_month', 0)}\n\n"
-            f"<b>System Health:</b>\n"
-            f"• API Status: {stats.get('api_status', 'Unknown')}\n"
-            f"• Uptime: {stats.get('uptime', 'N/A')}"
+            f"<b>Credit Distribution:</b>\n"
+            f"• Total Distributed: {credits.get('total_distributed', 0)}\n"
+            f"• Free Tier Users: {tier_breakdown.get('free', 0)}\n"
+            f"• Premium Tier Users: {tier_breakdown.get('premium', 0)}\n"
+            f"• MVP Tier Users: {tier_breakdown.get('mvp', 0)}\n\n"
+            f"Use /users for user list, /transactions for payment activity."
         )
     except Exception as e:
         logger.error(f"Stats error: {e}")
@@ -85,8 +91,20 @@ async def cmd_users(message: Message, api_service):
         
         user_list = "👥 <b>User Management</b>\n\n"
         for user in users[:20]:  # Show first 20
-            user_list += f"• {user['username']} ({user['email']})\n"
-            user_list += f"  Tier: {user['tier']} | Scans: {user['total_scans']}\n\n"
+            username = user.get('username', 'Unknown')
+            email = user.get('email', '—')
+            tier = user.get('tier', 'free')
+            total_spent = user.get('total_spent_tdl', 0)
+            credits = user.get('credits', {})
+
+            user_list += f"• {username} ({email})\n"
+            user_list += f"  Tier: {tier.upper()} | Spent: {total_spent} TDL\n"
+            if credits:
+                user_list += (
+                    f"  Credits - Free: {credits.get('free', 0)}, "
+                    f"Premium: {credits.get('premium', 0)}, MVP: {credits.get('mvp', 0)}\n"
+                )
+            user_list += "\n"
         
         await message.answer(user_list)
     except Exception as e:
@@ -103,11 +121,14 @@ async def cmd_transactions(message: Message, api_service):
     
     try:
         transactions = await api_service.get_transactions()
-        
+        if not transactions:
+            await message.answer("ℹ️ Transaction metrics are not yet exposed by the API.")
+            return
+
         tx_list = "💳 <b>Recent Transactions</b>\n\n"
         for tx in transactions[:15]:  # Show last 15
-            tx_list += f"• {tx['user']} - {tx['amount']} TDL\n"
-            tx_list += f"  Type: {tx['type']} | {tx['timestamp']}\n\n"
+            tx_list += f"• {tx.get('user', 'Unknown')} - {tx.get('amount', 0)} TDL\n"
+            tx_list += f"  Type: {tx.get('type', 'N/A')} | {tx.get('timestamp', 'N/A')}\n\n"
         
         await message.answer(tx_list)
     except Exception as e:

@@ -17,7 +17,11 @@ def get_main_menu():
         ],
         [
             InlineKeyboardButton(text="💎 Upgrade", callback_data="upgrade"),
-            InlineKeyboardButton(text="❓ Help", callback_data="show_help")
+            InlineKeyboardButton(text="🧾 Pricing", callback_data="pricing")
+        ],
+        [
+            InlineKeyboardButton(text="❓ Help", callback_data="show_help"),
+            InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")
         ]
     ])
 
@@ -25,9 +29,9 @@ def get_main_menu():
 def get_scan_tier_keyboard():
     """Scan tier selection keyboard"""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💚 FREE (Basic)", callback_data="scan_tier:free")],
-        [InlineKeyboardButton(text="⭐ PREMIUM (Advanced)", callback_data="scan_tier:premium")],
-        [InlineKeyboardButton(text="🚀 MVP (Unlimited)", callback_data="scan_tier:mvp")],
+        [InlineKeyboardButton(text="💚 Free • uses daily quota", callback_data="scan_tier:free")],
+        [InlineKeyboardButton(text="⭐ Premium • 10 TDL", callback_data="scan_tier:premium")],
+        [InlineKeyboardButton(text="🚀 MVP • 50 TDL", callback_data="scan_tier:mvp")],
         [InlineKeyboardButton(text="❌ Cancel", callback_data="cancel")]
     ])
 

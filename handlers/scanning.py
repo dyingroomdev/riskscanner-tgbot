@@ -23,16 +23,16 @@ class ScanStates(StatesGroup):
     selecting_tier = State()
 
 
+@router.callback_query(F.data == "scan")
+async def callback_scan(callback: CallbackQuery, state: FSMContext):
+    """Kick off scanning from inline keyboard."""
+    await cmd_scan(callback.message, state)
+    await callback.answer()
+
+
 @router.message(Command("scan"))
-async def cmd_scan(message: Message, state: FSMContext, api_service):
+async def cmd_scan(message: Message, state: FSMContext):
     """Start scanning process"""
-    # Check if user is logged in
-    user_data = await api_service.get_user_profile(telegram_id=message.from_user.id)
-    
-    if not user_data:
-        await message.answer(ERROR_NOT_LOGGED_IN)
-        return
-    
     await state.set_state(ScanStates.waiting_for_address)
     await message.answer(
         SCAN_PROMPT,
@@ -54,6 +54,8 @@ async def process_scan_address(message: Message, state: FSMContext):
     await state.update_data(address=address)
     await state.set_state(ScanStates.selecting_tier)
     
+    logger.info(f"Address stored in state: {address}")
+    
     await message.answer(
         "✅ Address validated!\n\n💎 Select scan tier:",
         reply_markup=get_scan_tier_keyboard()
@@ -67,6 +69,14 @@ async def process_scan_tier(callback: CallbackQuery, state: FSMContext, api_serv
     data = await state.get_data()
     address = data.get('address')
     
+    logger.info(f"Processing scan - Tier: {tier}, Address: {address}")
+    
+    if not address:
+        await callback.message.answer("❌ Error: Address not found. Please try /scan again.")
+        await state.clear()
+        await callback.answer()
+        return
+    
     # Show processing message
     processing_msg = await callback.message.answer(
         SCAN_PROCESSING.format(address=address)
@@ -74,49 +84,58 @@ async def process_scan_tier(callback: CallbackQuery, state: FSMContext, api_serv
     
     try:
         # Call API to scan
+        logger.info(f"Calling scan_address with: address={address}, tier={tier}, telegram_id={callback.from_user.id}")
+        
         result = await api_service.scan_address(
             address=address,
             tier=tier,
-            telegram_id=callback.from_user.id
+            telegram_id=callback.from_user.id,
         )
+        
+        logger.info(f"Scan result received: {result}")
         
         if result.get('success'):
             scan_data = result.get('data', {})
-            
-            # Format risk factors
-            risk_factors = scan_data.get('risk_factors', [])
-            risk_factors_text = '\n'.join([f"• {factor}" for factor in risk_factors]) or "None detected"
-            
-            # Format safe indicators
-            safe_indicators = scan_data.get('safe_indicators', [])
-            safe_indicators_text = '\n'.join([f"• {indicator}" for indicator in safe_indicators]) or "None found"
-            
-            # Risk emoji
             risk_score = scan_data.get('risk_score', 0)
-            if risk_score < 0.3:
-                risk_emoji = "🟢 LOW"
-            elif risk_score < 0.7:
-                risk_emoji = "🟡 MEDIUM"
-            else:
-                risk_emoji = "🔴 HIGH"
+            risk_level = scan_data.get('risk_level', 'UNKNOWN')
+            risk_factors = scan_data.get('risk_factors', [])
+            safe_indicators = scan_data.get('safe_indicators', [])
+            ai_summary = scan_data.get('ai_summary', 'No AI insights available')
+            recommendation = scan_data.get('recommendation', 'Proceed with caution')
             
-            # Send result
+            risk_factors_text = '\n'.join([f"• {factor}" for factor in risk_factors]) or "None detected"
+            safe_indicators_text = '\n'.join([f"• {indicator}" for indicator in safe_indicators]) or "None found"
+
+            if risk_score < 0.25:
+                risk_emoji = "🟢 LOW"
+            elif risk_score < 0.5:
+                risk_emoji = "🟡 MEDIUM"
+            elif risk_score < 0.75:
+                risk_emoji = "🟠 HIGH"
+            else:
+                risk_emoji = "🔴 CRITICAL"
+
+            tier_used = scan_data.get("tier_used", tier).upper()
+            header_note = scan_data.get("message") or "Analysis complete."
+
             await processing_msg.edit_text(
                 SCAN_RESULT_TEMPLATE.format(
-                    address=address[:8] + "..." + address[-8:],
-                    type=scan_data.get('type', 'Unknown'),
-                    risk_score=risk_score,
+                    address=f"{address[:8]}...{address[-8:]}",
+                    type=f"{scan_data.get('type', 'Unknown')} ({tier_used})",
+                    risk_score=f"{risk_score:.2f}",
+                    risk_level=risk_level,
                     risk_emoji=risk_emoji,
-                    analysis_summary=scan_data.get('analysis_summary', 'No summary available'),
+                    analysis_summary=header_note,
                     risk_factors=risk_factors_text,
                     safe_indicators=safe_indicators_text,
-                    ai_summary=scan_data.get('ai_summary', 'No AI insights available'),
-                    recommendation=scan_data.get('recommendation', 'Proceed with caution')
+                    ai_summary=ai_summary,
+                    recommendation=recommendation
                 )
             )
         else:
+            error_msg = result.get('error', 'Unknown error')
             await processing_msg.edit_text(
-                f"❌ Scan failed: {result.get('error', 'Unknown error')}"
+                f"❌ Scan failed: {error_msg}"
             )
     
     except Exception as e:
@@ -127,21 +146,38 @@ async def process_scan_tier(callback: CallbackQuery, state: FSMContext, api_serv
     await callback.answer()
 
 
+@router.callback_query(F.data == "history")
+async def callback_history(callback: CallbackQuery, api_service):
+    """Show scan history from inline button."""
+    await cmd_history(callback.message, api_service)
+    await callback.answer()
+
+
 @router.message(Command("history"))
 async def cmd_history(message: Message, api_service):
     """Show scan history"""
     try:
         history = await api_service.get_scan_history(telegram_id=message.from_user.id)
         
-        if not history:
+        if not history or len(history) == 0:
             await message.answer("📭 No scan history found.")
             return
         
-        history_text = "📜 <b>Your Scan History</b>\n\n"
+        history_text = "📜 <b>Your Recent Scans</b>\n\n"
         
         for idx, scan in enumerate(history[:10], 1):  # Show last 10
-            history_text += f"{idx}. <code>{scan['address'][:8]}...{scan['address'][-8:]}</code>\n"
-            history_text += f"   Risk: {scan['risk_score']:.2f} | {scan['timestamp']}\n\n"
+            if isinstance(scan, dict):
+                address = scan.get('address', 'N/A')
+                tier = scan.get('tier', 'free').upper()
+                risk_score_value = scan.get('risk_score')
+                risk_score = f"{float(risk_score_value):.2f}" if isinstance(risk_score_value, (int, float)) else scan.get('risk_score', 'N/A')
+                risk_level = scan.get('risk_level', 'UNKNOWN')
+                created_at = scan.get('created_at') or scan.get('timestamp', 'N/A')
+                history_text += (
+                    f"{idx}. <code>{address[:8]}...{address[-8:]}</code>\n"
+                    f"   Tier: {tier} | Risk: {risk_score} ({risk_level})\n"
+                    f"   {created_at}\n\n"
+                )
         
         await message.answer(history_text)
         
